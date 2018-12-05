@@ -1,7 +1,122 @@
+use std::ops;
+
 use bytes::{Buf, BufMut};
 
 use byteorder::{BigEndian, ByteOrder};
 
+use crate::coding::{Codec, UnexpectedEnd};
+
+//  +------+--------+-------------+-----------------------+
+//  | 2Bit | Length | Usable Bits | Range                 |
+//  +------+--------+-------------+-----------------------+
+//  | 00   | 1      | 6           | 0-63                  |
+//  |      |        |             |                       |
+//  | 01   | 2      | 14          | 0-16383               |
+//  |      |        |             |                       |
+//  | 10   | 4      | 30          | 0-1073741823          |
+//  |      |        |             |                       |
+//  | 11   | 8      | 62          | 0-4611686018427387903 |
+//  +------+--------+-------------+-----------------------+
+
+const ONE_OCTET_MAX: u64 = 63;
+const TWO_OCTETS_MIN: u64 = ONE_OCTET_MAX + 1;
+const TWO_OCTETS_MAX: u64 = 16383;
+const FOUR_OCTETS_MIN: u64 = TWO_OCTETS_MAX + 1;
+const FOUR_OCTETS_MAX: u64 = 1_073_741_823;
+const EIGHT_OCTETS_MIN: u64 = FOUR_OCTETS_MAX + 1;
+const EIGHT_OCTETS_MAX: u64 = 4_611_686_018_427_387_903;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct VarInt(u64);
+
+impl VarInt {
+    pub fn size(&self) -> usize {
+        match self.0 {
+            0...ONE_OCTET_MAX => 1,
+            TWO_OCTETS_MIN...TWO_OCTETS_MAX => 2,
+            FOUR_OCTETS_MIN...FOUR_OCTETS_MAX => 4,
+            EIGHT_OCTETS_MIN...EIGHT_OCTETS_MAX => 8,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<VarInt> for u64 {
+    fn from(varint: VarInt) -> Self {
+        varint.0
+    }
+}
+
+impl From<VarInt> for usize {
+    fn from(varint: VarInt) -> Self {
+        varint.0 as usize
+    }
+}
+
+impl From<u8> for VarInt {
+    fn from(int: u8) -> Self {
+        VarInt(u64::from(int))
+    }
+}
+
+impl From<u16> for VarInt {
+    fn from(int: u16) -> Self {
+        VarInt(u64::from(int))
+    }
+}
+
+impl From<u32> for VarInt {
+    fn from(int: u32) -> Self {
+        VarInt(u64::from(int))
+    }
+}
+
+impl From<u64> for VarInt {
+    fn from(int: u64) -> Self {
+        debug_assert!(int <= EIGHT_OCTETS_MAX);
+        VarInt(int)
+    }
+}
+impl From<usize> for VarInt {
+    fn from(int: usize) -> Self {
+        Self::from(int as u64)
+    }
+}
+
+impl ops::Add for VarInt {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let sum = self.0 + rhs.0;
+        VarInt::from(sum)
+    }
+}
+
+impl ops::Add<usize> for VarInt {
+    type Output = usize;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        usize::from(self) + rhs
+    }
+}
+
+impl ops::Add<VarInt> for usize {
+    type Output = Self;
+
+    fn add(self, rhs: VarInt) -> Self::Output {
+        self + Self::from(rhs)
+    }
+}
+
+impl Codec for VarInt {
+    fn decode<B: Buf>(buf: &mut B) -> Result<Self, UnexpectedEnd> {
+        unimplemented!()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        unimplemented!()
+    }
+}
 pub fn size(x: u64) -> Option<usize> {
     if x < 2u64.pow(6) {
         Some(1)
