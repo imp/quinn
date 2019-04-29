@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::net::{SocketAddr, SocketAddrV6};
 use std::str;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -11,6 +11,7 @@ use futures::sync::mpsc;
 use futures::task::{self, Task};
 use futures::Stream as FuturesStream;
 use futures::{Async, Future, Poll};
+use parking_lot::Mutex;
 use proto::{self as proto, ClientConfig, ConnectError, ConnectionHandle, DatagramEvent};
 use slog::Logger;
 
@@ -59,7 +60,7 @@ impl Endpoint {
         addr: &SocketAddr,
         server_name: &str,
     ) -> Result<Connecting, ConnectError> {
-        let mut endpoint = self.inner.lock().unwrap();
+        let mut endpoint = self.inner.lock();
         if endpoint.driver_lost {
             return Err(ConnectError::EndpointStopping);
         }
@@ -86,7 +87,7 @@ impl Endpoint {
     ) -> io::Result<()> {
         let addr = socket.local_addr()?;
         let socket = UdpSocket::from_std(socket, &reactor)?;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.socket = socket;
         inner.ipv6 = addr.is_ipv6();
         Ok(())
@@ -94,7 +95,7 @@ impl Endpoint {
 
     /// Get the local `SocketAddr` the underlying socket is bound to
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.inner.lock().unwrap().socket.local_addr()
+        self.inner.lock().socket.local_addr()
     }
 
     /// Close all of this endpoint's connections immediately and cease accepting new connections.
@@ -102,7 +103,7 @@ impl Endpoint {
     /// See `Connection::close` for details.
     pub fn close(&self, error_code: u16, reason: &[u8]) {
         let reason = Bytes::from(reason);
-        let mut endpoint = self.inner.lock().unwrap();
+        let mut endpoint = self.inner.lock();
         endpoint.close = Some((error_code, reason.clone()));
         for sender in endpoint.connections.values() {
             // Ignoring errors from dropped connections
@@ -134,7 +135,7 @@ impl Future for EndpointDriver {
     type Item = ();
     type Error = io::Error;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let endpoint = &mut *self.0.lock().unwrap();
+        let endpoint = &mut *self.0.lock();
         if endpoint.driver.is_none() {
             endpoint.driver = Some(task::current());
         }
@@ -161,7 +162,7 @@ impl Future for EndpointDriver {
 
 impl Drop for EndpointDriver {
     fn drop(&mut self) {
-        let mut endpoint = self.0.lock().unwrap();
+        let mut endpoint = self.0.lock();
         endpoint.driver_lost = true;
         if let Some(task) = endpoint.incoming_reader.take() {
             task.notify();
@@ -205,7 +206,7 @@ impl EndpointInner {
                         Some((handle, DatagramEvent::NewConnection(conn))) => {
                             let conn = ConnectionDriver(self.create_connection(None, handle, conn));
                             if !self.incoming_live {
-                                conn.0.lock().unwrap().implicit_close();
+                                conn.0.lock().implicit_close();
                             }
                             self.incoming.push_back(conn);
                             if let Some(task) = self.incoming_reader.take() {
@@ -358,7 +359,7 @@ impl FuturesStream for Incoming {
     type Item = Connecting;
     type Error = (); // FIXME: Infallible
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let endpoint = &mut *self.0.lock().unwrap();
+        let endpoint = &mut *self.0.lock();
         if endpoint.driver_lost {
             Ok(Async::Ready(None))
         } else if let Some(conn) = endpoint.incoming.pop_front() {
@@ -375,12 +376,12 @@ impl FuturesStream for Incoming {
 
 impl Drop for Incoming {
     fn drop(&mut self) {
-        let endpoint = &mut *self.0.lock().unwrap();
+        let endpoint = &mut *self.0.lock();
         endpoint.inner.reject_new_connections();
         endpoint.incoming_live = false;
         endpoint.incoming_reader = None;
         for conn in &mut endpoint.incoming {
-            conn.0.lock().unwrap().implicit_close();
+            conn.0.lock().implicit_close();
         }
     }
 }
@@ -412,14 +413,14 @@ impl EndpointRef {
 
 impl Clone for EndpointRef {
     fn clone(&self) -> Self {
-        self.0.lock().unwrap().ref_count += 1;
+        self.0.lock().ref_count += 1;
         Self(self.0.clone())
     }
 }
 
 impl Drop for EndpointRef {
     fn drop(&mut self) {
-        let endpoint = &mut *self.0.lock().unwrap();
+        let endpoint = &mut *self.0.lock();
         if let Some(x) = endpoint.ref_count.checked_sub(1) {
             endpoint.ref_count = x;
             if x == 0 {

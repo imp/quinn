@@ -48,7 +48,7 @@ impl SendStream {
     /// to be shorter than `buf.len()`, indicating that only a prefix of `buf` was written.
     pub fn poll_write(&mut self, buf: &[u8]) -> Poll<usize, WriteError> {
         use proto::WriteError::*;
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         if self.is_0rtt {
             conn.check_0rtt()
                 .map_err(|()| WriteError::ZeroRttRejected)?;
@@ -78,7 +78,7 @@ impl SendStream {
     /// No new data may be written after calling this method. Completes when the peer has
     /// acknowledged all sent data, retransmitting data as needed.
     pub fn poll_finish(&mut self) -> Poll<(), WriteError> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         if self.is_0rtt {
             conn.check_0rtt()
                 .map_err(|()| WriteError::ZeroRttRejected)?;
@@ -118,7 +118,7 @@ impl SendStream {
     /// was called previously and all data has already been transmitted at least once, the peer
     /// may still receive all written data.
     pub fn reset(&mut self, error_code: u16) {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         if self.is_0rtt && conn.check_0rtt().is_err() {
             return;
         }
@@ -149,7 +149,7 @@ impl AsyncWrite for SendStream {
 
 impl Drop for SendStream {
     fn drop(&mut self) {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         if conn.error.is_some() || (self.is_0rtt && conn.check_0rtt().is_err()) {
             return;
         }
@@ -214,7 +214,7 @@ impl RecvStream {
     pub fn poll_read(&mut self, buf: &mut [u8]) -> Poll<usize, ReadError> {
         self.any_data_read = true;
         use proto::ReadError::*;
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         if self.is_0rtt {
             conn.check_0rtt().map_err(|()| ReadError::ZeroRttRejected)?;
         }
@@ -249,7 +249,7 @@ impl RecvStream {
     pub fn poll_read_unordered(&mut self) -> Poll<(Bytes, u64), ReadError> {
         self.any_data_read = true;
         use proto::ReadError::*;
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         if self.is_0rtt {
             conn.check_0rtt().map_err(|()| ReadError::ZeroRttRejected)?;
         }
@@ -302,7 +302,7 @@ impl RecvStream {
     /// Has no effect if the incoming stream already finished, even if the local application hasn't
     /// yet read all buffered data.
     pub fn stop(&mut self, error_code: u16) {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         if self.is_0rtt && conn.check_0rtt().is_err() {
             return;
         }
@@ -376,7 +376,7 @@ impl AsyncRead for RecvStream {
 
 impl Drop for RecvStream {
     fn drop(&mut self) {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         if conn.error.is_some() || (self.is_0rtt && conn.check_0rtt().is_err()) {
             return;
         }

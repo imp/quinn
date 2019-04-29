@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::mem;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -10,6 +10,7 @@ use futures::sync::{mpsc, oneshot};
 use futures::task::{self, Task};
 use futures::Stream as FuturesStream;
 use futures::{Async, Future, Poll};
+use parking_lot::Mutex;
 use proto::{
     ConnectionError, ConnectionHandle, ConnectionId, Directionality, StreamId, TimerUpdate,
 };
@@ -57,12 +58,7 @@ impl Connecting {
     ///
     /// For incoming connections, a 0.5-RTT connection will always be successfully constructed.
     pub fn into_0rtt(mut self) -> Result<(ConnectionDriver, Connection, IncomingStreams), Self> {
-        if (self.0.as_mut().unwrap().0)
-            .lock()
-            .unwrap()
-            .inner
-            .has_0rtt()
-        {
+        if (self.0.as_mut().unwrap().0).lock().inner.has_0rtt() {
             let ConnectionDriver(conn) = self.0.take().unwrap();
             Ok(new_connection(conn))
         } else {
@@ -78,9 +74,9 @@ impl Future for Connecting {
         let connected = match &mut self.0 {
             Some(driver) => match driver.poll()? {
                 Async::Ready(()) => {
-                    return Err((driver.0).lock().unwrap().error.as_ref().unwrap().clone());
+                    return Err((driver.0).lock().error.as_ref().unwrap().clone());
                 }
-                Async::NotReady => (driver.0).lock().unwrap().connected,
+                Async::NotReady => (driver.0).lock().connected,
             },
             None => panic!("polled after yielding Ready"),
         };
@@ -118,7 +114,7 @@ impl Future for ConnectionDriver {
     type Item = ();
     type Error = ConnectionError;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let conn = &mut *self.0.lock().unwrap();
+        let conn = &mut *self.0.lock();
 
         loop {
             let now = Instant::now();
@@ -165,7 +161,7 @@ impl Connection {
     pub fn open_uni(&self) -> OpenUni {
         let (send, recv) = oneshot::channel();
         {
-            let mut conn = self.0.lock().unwrap();
+            let mut conn = self.0.lock();
             if let Some(x) = conn.inner.open(Directionality::Uni) {
                 let _ = send.send(Ok((x, conn.inner.is_handshaking())));
             } else {
@@ -184,7 +180,7 @@ impl Connection {
     pub fn open_bi(&self) -> OpenBi {
         let (send, recv) = oneshot::channel();
         {
-            let mut conn = self.0.lock().unwrap();
+            let mut conn = self.0.lock();
             if let Some(x) = conn.inner.open(Directionality::Bi) {
                 let _ = send.send(Ok((x, conn.inner.is_handshaking())));
             } else {
@@ -210,34 +206,34 @@ impl Connection {
     /// `reason` will be truncated to fit in a single packet with overhead; to improve odds that it
     /// is preserved in full, it should be kept under 1KiB.
     pub fn close(&self, error_code: u16, reason: &[u8]) {
-        let conn = &mut *self.0.lock().unwrap();
+        let conn = &mut *self.0.lock();
         conn.close(error_code, reason.into());
     }
 
     /// The peer's UDP address.
     pub fn remote_address(&self) -> SocketAddr {
-        self.0.lock().unwrap().inner.remote()
+        self.0.lock().inner.remote()
     }
 
     /// The `ConnectionId` defined for `conn` by the peer.
     pub fn remote_id(&self) -> ConnectionId {
-        self.0.lock().unwrap().inner.rem_cid()
+        self.0.lock().inner.rem_cid()
     }
 
     /// The negotiated application protocol
     pub fn protocol(&self) -> Option<Box<[u8]>> {
-        self.0.lock().unwrap().inner.protocol().map(|x| x.into())
+        self.0.lock().inner.protocol().map(|x| x.into())
     }
 
     // Update traffic keys spontaneously for testing purposes.
     #[doc(hidden)]
     pub fn force_key_update(&self) {
-        self.0.lock().unwrap().inner.force_key_update()
+        self.0.lock().inner.force_key_update()
     }
 
     /// Replace the diagnostic logger
     pub fn set_logger(&self, log: Logger) {
-        let mut conn = self.0.lock().unwrap();
+        let mut conn = self.0.lock();
         conn.log = log.clone();
         conn.inner.set_logger(log);
     }
@@ -250,7 +246,7 @@ impl FuturesStream for IncomingStreams {
     type Item = NewStream;
     type Error = ConnectionError;
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let mut conn = self.0.lock().unwrap();
+        let mut conn = self.0.lock();
         if let Some(x) = conn.inner.accept() {
             mem::drop(conn); // Release the lock so clone can take it
             let stream = if x.directionality() == Directionality::Uni {
@@ -360,14 +356,14 @@ impl ConnectionRef {
 
 impl Clone for ConnectionRef {
     fn clone(&self) -> Self {
-        self.0.lock().unwrap().ref_count += 1;
+        self.0.lock().ref_count += 1;
         Self(self.0.clone())
     }
 }
 
 impl Drop for ConnectionRef {
     fn drop(&mut self) {
-        let conn = &mut *self.0.lock().unwrap();
+        let conn = &mut *self.0.lock();
         if let Some(x) = conn.ref_count.checked_sub(1) {
             conn.ref_count = x;
             if x == 0
